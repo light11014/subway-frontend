@@ -51,19 +51,24 @@ export const N = STATIONS.length;
 export const CODE_IDX = Object.fromEntries(STATIONS.map((s, i) => [s.code, i]));
 
 // ─── SVG 캔버스 레이아웃 ───────────────────────────────────────────────────────
-// 라벨 공간 확보를 위해 가로를 충분히 넓게 설정
-export const SVG_W = 860;
-export const SVG_H = 580;
+export const SVG_W = 980;
+export const SVG_H = 680;
 export const CX = SVG_W / 2;
 export const CY = SVG_H / 2 + 8;
-export const RX = 300;
-export const RY = 235;
 
 /**
- * OFFSET: 선로 스트로크 절반(3.5) + 열차 박스 절반(7) = 10.5 ≈ 11
- * → 박스가 선로 위에 딱 얹힌 것처럼 보임
+ * 캡슐형(stadium) 궤도 파라미터
+ * - HALF_STRAIGHT: 위/아래 직선이 중심에서 좌우로 뻗는 절반 길이
+ * - ARC_R: 좌우 반원 반지름
+ *
+ * 전체 폭  = 2 * HALF_STRAIGHT + 2 * ARC_R
+ * 전체 높이 = 2 * ARC_R
  */
-export const OFFSET = 19;
+export const HALF_STRAIGHT = 210;
+export const ARC_R = 185;
+
+/** 열차를 선로에서 얼마나 띄울지 */
+export const OFFSET = 11;
 
 // ─── 색상 ──────────────────────────────────────────────────────────────────────
 export const COLOR = {
@@ -82,53 +87,173 @@ export const COLOR = {
 
 // ─── 좌표 계산 유틸 ────────────────────────────────────────────────────────────
 
+/**
+ * 캡슐형(stadium) 둘레 길이
+ * 시작점은 "맨 위 중앙", 시계방향 진행
+ *
+ * 구간 순서:
+ * 1) 위 중앙 → 위 오른쪽 직선
+ * 2) 오른쪽 반원 (위 → 아래)
+ * 3) 아래 직선 (오른쪽 → 왼쪽)
+ * 4) 왼쪽 반원 (아래 → 위)
+ * 5) 위 왼쪽 직선 → 위 중앙
+ */
+export const PERIMETER =
+  HALF_STRAIGHT + // top right half
+  Math.PI * ARC_R + // right arc
+  HALF_STRAIGHT * 2 + // bottom straight
+  Math.PI * ARC_R + // left arc
+  HALF_STRAIGHT; // top left half
+
+/**
+ * 둘레 거리 s(0 ~ PERIMETER) 위치의 점과 바깥쪽 법선 벡터 계산
+ */
+export function pointOnCapsule(s) {
+  let d = ((s % PERIMETER) + PERIMETER) % PERIMETER;
+
+  // 1) 위 중앙 -> 위 오른쪽 직선
+  if (d <= HALF_STRAIGHT) {
+    return {
+      x: CX + d,
+      y: CY - ARC_R,
+      nx: 0,
+      ny: -1,
+    };
+  }
+  d -= HALF_STRAIGHT;
+
+  // 2) 오른쪽 반원 (위 -> 아래)
+  if (d <= Math.PI * ARC_R) {
+    const theta = -Math.PI / 2 + d / ARC_R;
+    const nx = Math.cos(theta);
+    const ny = Math.sin(theta);
+    return {
+      x: CX + HALF_STRAIGHT + ARC_R * nx,
+      y: CY + ARC_R * ny,
+      nx,
+      ny,
+    };
+  }
+  d -= Math.PI * ARC_R;
+
+  // 3) 아래 직선 (오른쪽 -> 왼쪽)
+  if (d <= HALF_STRAIGHT * 2) {
+    return {
+      x: CX + HALF_STRAIGHT - d,
+      y: CY + ARC_R,
+      nx: 0,
+      ny: 1,
+    };
+  }
+  d -= HALF_STRAIGHT * 2;
+
+  // 4) 왼쪽 반원 (아래 -> 위)
+  if (d <= Math.PI * ARC_R) {
+    const theta = Math.PI / 2 + d / ARC_R;
+    const nx = Math.cos(theta);
+    const ny = Math.sin(theta);
+    return {
+      x: CX - HALF_STRAIGHT + ARC_R * nx,
+      y: CY + ARC_R * ny,
+      nx,
+      ny,
+    };
+  }
+  d -= Math.PI * ARC_R;
+
+  // 5) 위 왼쪽 직선 (왼쪽 -> 중앙)
+  return {
+    x: CX - HALF_STRAIGHT + d,
+    y: CY - ARC_R,
+    nx: 0,
+    ny: -1,
+  };
+}
+
 /** 역 인덱스 → 선로 위 SVG 좌표 */
 export function stationPos(i) {
-  const a = (i / N) * Math.PI * 2 - Math.PI / 2;
-  return { x: CX + RX * Math.cos(a), y: CY + RY * Math.sin(a), a };
+  const s = (i / N) * PERIMETER;
+  const p = pointOnCapsule(s);
+  return { x: p.x, y: p.y, s };
 }
 
 export const POSITIONS = STATIONS.map((s, i) => ({ ...s, ...stationPos(i) }));
 
 /**
- * 두 역 코드 사이의 progress(0~1) 위치 — 타원 호(arc) 위에서 보간
- * 직선 보간(lerp) 대신 각도 보간을 사용해 열차가 선로 위를 정확히 따라가도록 함
+ * 두 역 코드 사이의 progress(0~1) 위치
+ * direction:
+ * - 외선: 시계방향
+ * - 내선: 반시계방향
  */
 export function lerpOnTrack(fromCode, toCode, progress, direction) {
   const fi = CODE_IDX[fromCode];
   const ti = CODE_IDX[toCode];
   if (fi == null || ti == null) return null;
 
-  const fa = (fi / N) * Math.PI * 2 - Math.PI / 2;
-  let ta = (ti / N) * Math.PI * 2 - Math.PI / 2;
+  const fs = (fi / N) * PERIMETER;
+  const ts = (ti / N) * PERIMETER;
 
-  let da = ta - fa;
-  // 외선(시계방향): da가 음수(wrap)면 2π 더함
-  // 내선(반시계방향): da가 양수(wrap)면 2π 뺌
-  if (direction === "외선" && da < -0.01) da += 2 * Math.PI;
-  if (direction === "내선" && da > 0.01) da -= 2 * Math.PI;
+  let ds = ts - fs;
 
-  const a = fa + da * progress;
+  // 외선(시계방향): 음수면 한 바퀴 더함
+  if (direction === "외선" && ds < 0) ds += PERIMETER;
+
+  // 내선(반시계방향): 양수면 반시계 shortest가 아니라 한 바퀴 반대로
+  if (direction === "내선" && ds > 0) ds -= PERIMETER;
+
+  const s = fs + ds * progress;
+  const p = pointOnCapsule(s);
+
   return {
-    x: CX + RX * Math.cos(a),
-    y: CY + RY * Math.sin(a),
-    a,
+    x: p.x,
+    y: p.y,
+    s,
+    nx: p.nx,
+    ny: p.ny,
   };
 }
 
 /**
- * 선로 위 좌표를 중심에서 방사 방향으로 OFFSET 이동
- * direction: "외선" → 바깥(+), "내선" → 안쪽(-)
+ * 선로 위 좌표를 바깥/안쪽으로 OFFSET 이동
  */
 export function radialOffset(x, y, direction) {
-  const dx = x - CX,
-    dy = y - CY;
-  const len = Math.sqrt(dx * dx + dy * dy) || 1;
+  const p = nearestNormalOnCapsule(x, y);
   const sign = direction === "외선" ? 1 : -1;
+
   return {
-    x: x + sign * (dx / len) * OFFSET,
-    y: y + sign * (dy / len) * OFFSET,
+    x: x + sign * p.nx * OFFSET,
+    y: y + sign * p.ny * OFFSET,
   };
+}
+
+/**
+ * 주어진 점에 대해 캡슐 위의 바깥쪽 법선을 근사 계산
+ * - 위/아래 직선 구간은 수직 법선
+ * - 좌우 반원 구간은 원 중심 기준 방사 법선
+ */
+export function nearestNormalOnCapsule(x, y) {
+  const rightCx = CX + HALF_STRAIGHT;
+  const leftCx = CX - HALF_STRAIGHT;
+
+  // 위/아래 직선 구간 판정
+  if (x >= leftCx && x <= rightCx) {
+    if (y < CY) return { nx: 0, ny: -1 };
+    return { nx: 0, ny: 1 };
+  }
+
+  // 오른쪽 반원
+  if (x > rightCx) {
+    const dx = x - rightCx;
+    const dy = y - CY;
+    const len = Math.sqrt(dx * dx + dy * dy) || 1;
+    return { nx: dx / len, ny: dy / len };
+  }
+
+  // 왼쪽 반원
+  const dx = x - leftCx;
+  const dy = y - CY;
+  const len = Math.sqrt(dx * dx + dy * dy) || 1;
+  return { nx: dx / len, ny: dy / len };
 }
 
 /** 다음 역 인덱스 (방향별) */
@@ -138,20 +263,40 @@ export function nextStIdx(idx, direction) {
 
 /**
  * 역명 라벨 위치
- * 인접 역 겹침 방지를 위해 짝수/홀수 인덱스를 교호(alternating) 거리로 배치
+ * - 선로 가까이에 붙이되
+ * - 짝/홀수로 살짝만 벌림
+ * - 일부 역은 소폭 보정
  */
 export function labelPos(i) {
-  const a = (i / N) * Math.PI * 2 - Math.PI / 2;
+  const s = (i / N) * PERIMETER;
+  const p = pointOnCapsule(s);
 
-  const dist = i % 2 === 0 ? 16 : 20;
+  const dist = i % 2 === 0 ? 16 : 24;
 
-  const lx = CX + (RX + dist) * Math.cos(a);
-  const ly = CY + (RY + dist) * Math.sin(a);
-  const ca = Math.cos(a);
+  let lx = p.x + p.nx * dist;
+  let ly = p.y + p.ny * dist;
+
+  const station = STATIONS[i];
+
+  const adjust = {
+    203: { dx: -8, dy: -6 }, // 을지로3가
+    204: { dx: 8, dy: -6 }, // 을지로4가
+    205: { dx: 14, dy: -2 }, // 동대문역사문화공원
+    206: { dx: 10, dy: -6 }, // 신당
+    216: { dx: 6, dy: 4 }, // 잠실
+    217: { dx: 8, dy: 4 }, // 잠실새내
+    218: { dx: 8, dy: 4 }, // 종합운동장
+    232: { dx: -6, dy: 0 }, // 구로디지털단지
+  };
+
+  if (adjust[station.code]) {
+    lx += adjust[station.code].dx;
+    ly += adjust[station.code].dy;
+  }
 
   return {
     lx,
     ly,
-    anchor: ca > 0.15 ? "start" : ca < -0.15 ? "end" : "middle",
+    anchor: p.nx > 0.25 ? "start" : p.nx < -0.25 ? "end" : "middle",
   };
 }

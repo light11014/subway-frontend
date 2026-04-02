@@ -1,22 +1,34 @@
 import {
-  STATIONS,
   POSITIONS,
   SVG_W,
   SVG_H,
   CX,
   CY,
-  RX,
-  RY,
+  HALF_STRAIGHT,
+  ARC_R,
   COLOR,
   labelPos,
 } from "../constants/stations.js";
 import TrainMarker from "./TrainMarker.jsx";
 
-function buildTrackPath() {
-  const pts = POSITIONS.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(
-    " ",
-  );
-  return `M ${pts} Z`;
+/** 캡슐형 선로 path */
+function buildCapsulePath(inset = 0) {
+  const r = ARC_R - inset;
+  const half = HALF_STRAIGHT;
+
+  const leftX = CX - half;
+  const rightX = CX + half;
+  const topY = CY - r;
+  const bottomY = CY + r;
+
+  return [
+    `M ${leftX} ${topY}`,
+    `L ${rightX} ${topY}`,
+    `A ${r} ${r} 0 0 1 ${rightX} ${bottomY}`,
+    `L ${leftX} ${bottomY}`,
+    `A ${r} ${r} 0 0 1 ${leftX} ${topY}`,
+    "Z",
+  ].join(" ");
 }
 
 export default function SubwayMap({ trains, selected, onSelectTrain }) {
@@ -28,34 +40,32 @@ export default function SubwayMap({ trains, selected, onSelectTrain }) {
         height="100%"
         preserveAspectRatio="xMidYMid meet"
       >
-        <ellipse
-          cx={CX}
-          cy={CY}
-          rx={RX - 2}
-          ry={RY - 2}
-          fill={COLOR.trackFill}
-        />
+        {/* 내부 배경 */}
+        <path d={buildCapsulePath(6)} fill={COLOR.trackFill} />
 
+        {/* 선로 */}
         <path
-          d={buildTrackPath()}
+          d={buildCapsulePath(0)}
           fill="none"
           stroke={COLOR.track}
-          strokeWidth={10}
+          strokeWidth={8}
           strokeLinejoin="round"
         />
 
+        {/* 역 도트 */}
         {POSITIONS.map((p) => (
           <circle
             key={p.code}
             cx={p.x}
             cy={p.y}
-            r={5.8}
+            r={4.5}
             fill="#fff"
             stroke={COLOR.stationDot}
-            strokeWidth={2}
+            strokeWidth={1.6}
           />
         ))}
 
+        {/* 역명 */}
         {POSITIONS.map((p, i) => {
           const { lx, ly, anchor } = labelPos(i);
           return (
@@ -66,8 +76,8 @@ export default function SubwayMap({ trains, selected, onSelectTrain }) {
               textAnchor={anchor}
               dominantBaseline="middle"
               fill={COLOR.labelColor}
-              fontSize={11.0}
-              fontWeight={500}
+              fontSize={11.5}
+              fontWeight={600}
               fontFamily="'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif"
             >
               {p.name}
@@ -75,6 +85,7 @@ export default function SubwayMap({ trains, selected, onSelectTrain }) {
           );
         })}
 
+        {/* 내선 */}
         {trains
           .filter((t) => t.direction === "내선")
           .map((train) => (
@@ -86,6 +97,7 @@ export default function SubwayMap({ trains, selected, onSelectTrain }) {
             />
           ))}
 
+        {/* 외선 */}
         {trains
           .filter((t) => t.direction === "외선")
           .map((train) => (
@@ -97,6 +109,7 @@ export default function SubwayMap({ trains, selected, onSelectTrain }) {
             />
           ))}
 
+        {/* 중앙 워터마크 */}
         <text
           x={CX}
           y={CY - 8}
@@ -111,7 +124,7 @@ export default function SubwayMap({ trains, selected, onSelectTrain }) {
         </text>
         <text
           x={CX}
-          y={CY + 52}
+          y={CY + 50}
           textAnchor="middle"
           dominantBaseline="middle"
           fill="#b0d9bc"

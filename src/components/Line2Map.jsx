@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { N, COLOR } from "../constants/stations.js";
 import { useSubwaySSE } from "../hooks/useSubwaySSE.js";
 import SubwayMap from "./SubwayMap.jsx";
@@ -9,31 +9,83 @@ import TrainList from "./TrainList.jsx";
 export default function Line2Map({
   sseUrl = "http://localhost:8080/api/subway/line2/stream",
 }) {
-  const [useMock, setUseMock] = useState(true);
   const [selected, setSelected] = useState(null);
   const [listVisible, setListVisible] = useState(true);
-  const [activeTab, setActiveTab] = useState("외선");
 
-  const { trains, connected } = useSubwaySSE(sseUrl, useMock);
+  // 서버 원본 데이터
+  const { trains, connected } = useSubwaySSE(sseUrl);
 
-  const outerTrains = useMemo(
-    () => trains.filter((t) => t.direction === "외선"),
-    [trains],
-  );
-  const innerTrains = useMemo(
-    () => trains.filter((t) => t.direction === "내선"),
-    [trains],
-  );
+  // 화면에 그릴 애니메이션용 데이터
+  const [animatedTrains, setAnimatedTrains] = useState([]);
+  const targetRef = useRef([]);
 
-  const outerCount = outerTrains.length;
-  const innerCount = innerTrains.length;
+  // 서버에서 새 데이터 오면 target 갱신
+  useEffect(() => {
+    targetRef.current = trains;
+  }, [trains]);
+
+  // 부드럽게 progress 보간
+  useEffect(() => {
+    let frameId;
+
+    const animate = () => {
+      setAnimatedTrains((prev) => {
+        const prevMap = new Map(prev.map((t) => [t.trainId, t]));
+        const next = targetRef.current.map((target) => {
+          const current = prevMap.get(target.trainId);
+
+          // 새로 들어온 열차면 바로 표시
+          if (!current) return target;
+
+          // 구간이 바뀌면 점프 허용
+          if (
+            current.stationCode !== target.stationCode ||
+            current.nextStationCode !== target.nextStationCode ||
+            current.direction !== target.direction
+          ) {
+            return target;
+          }
+
+          const currentProgress = current.progress ?? 0;
+          const targetProgress = target.progress ?? 0;
+          const diff = targetProgress - currentProgress;
+
+          // 충분히 가까우면 target으로 맞춤
+          if (Math.abs(diff) < 0.002) {
+            return { ...target, progress: targetProgress };
+          }
+
+          // 부드럽게 따라가기
+          return {
+            ...target,
+            progress: currentProgress + diff * 0.15,
+          };
+        });
+
+        return next;
+      });
+
+      frameId = requestAnimationFrame(animate);
+    };
+
+    frameId = requestAnimationFrame(animate);
+    return () => cancelAnimationFrame(frameId);
+  }, []);
+
+  const outerCount = trains.filter((t) => t.direction === "외선").length;
+  const innerCount = trains.filter((t) => t.direction === "내선").length;
+
   const selectedTrain = selected
-    ? trains.find((t) => t.trainId === selected)
+    ? (animatedTrains.find((t) => t.trainId === selected) ??
+      trains.find((t) => t.trainId === selected) ??
+      null)
     : null;
 
   function toggleSelect(id) {
     setSelected((prev) => (prev === id ? null : id));
   }
+
+  const listTrains = useMemo(() => animatedTrains, [animatedTrains]);
 
   return (
     <div
@@ -121,26 +173,9 @@ export default function Line2Map({
             <span
               style={{ fontSize: "13px", color: "#374151", fontWeight: 600 }}
             >
-              {connected ? (useMock ? "DEMO" : "LIVE") : "오프라인"}
+              {connected ? "LIVE" : "오프라인"}
             </span>
           </div>
-
-          <button
-            onClick={() => setUseMock((v) => !v)}
-            style={{
-              padding: "8px 14px",
-              borderRadius: "10px",
-              cursor: "pointer",
-              border: `1px solid ${useMock ? COLOR.track : "#E5E7EB"}`,
-              background: useMock ? "#F0FAF4" : "#fff",
-              color: useMock ? "#065F46" : "#6B7280",
-              fontSize: "13px",
-              fontFamily: "inherit",
-              fontWeight: 600,
-            }}
-          >
-            {useMock ? "데모 모드" : "실시간 모드"}
-          </button>
         </div>
       </div>
 
@@ -153,7 +188,7 @@ export default function Line2Map({
           minHeight: 0,
         }}
       >
-        {/* 지도 */}
+        {/* 왼쪽 지도 */}
         <div
           style={{
             flex: 1,
@@ -166,7 +201,7 @@ export default function Line2Map({
         >
           <div style={{ flex: 1, minHeight: 0 }}>
             <SubwayMap
-              trains={trains}
+              trains={animatedTrains}
               selected={selected}
               onSelectTrain={toggleSelect}
             />
@@ -205,7 +240,7 @@ export default function Line2Map({
           </div>
         </div>
 
-        {/* 사이드바 */}
+        {/* 오른쪽 사이드바 */}
         <div
           style={{
             width: "320px",
@@ -280,13 +315,9 @@ export default function Line2Map({
               }}
             >
               <TrainList
-                trains={activeTab === "외선" ? outerTrains : innerTrains}
+                trains={listTrains}
                 selected={selected}
                 onSelect={toggleSelect}
-                activeTab={activeTab}
-                onChangeTab={setActiveTab}
-                outerCount={outerCount}
-                innerCount={innerCount}
               />
             </div>
           )}
